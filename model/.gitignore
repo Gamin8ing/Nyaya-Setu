@@ -1,0 +1,62 @@
+# Ignore archive, virtualenvs, case index and common Python / ML artifacts
+
+# Project folders
+/archive/
+case_index/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model & ML artifacts
+models/
+model/
+model_weights/
+checkpoints/
+checkpoint
+saved_model/
+saved_model.pb
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.onnx
+*.tflite
+*.pb
+*.joblib
+*.pkl
+*.pickle
+*.npz
+*.npy
+
+# Logging / tracking
+logs/
+*.log
+mlruns/
+wandb/
+tensorboard/
+
+# Test / coverage
+.coverage
+.pytest_cache/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store

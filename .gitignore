@@ -1,0 +1,10 @@
+# Root gitignore for repository
+# Ignore environment files containing secrets
+.env
+
+# Node and Python typical ignores (project-specific ignores are kept in subfolders)
+node_modules/
+.venv/
+venv/
+__pycache__/
+.DS_Store
