@@ -1,0 +1,392 @@
+Overview of notebook: main.ipynb
+
+This document explains each cell in `model/main.ipynb`. For every cell (numbered from 1 in notebook order) I provide:
+- Cell type (code/markdown)
+- Purpose and high-level behavior
+- Key variables, functions, classes defined or used
+- Inputs and outputs (what it consumes and produces)
+- Important interactions with other cells
+- Edge cases, assumptions, and usage notes
+
+---
+
+Cell 1 — Code
+Purpose:
+ - Import `os` and log in to Hugging Face using a token stored in the HF_TOKEN environment variable.
+
+What it does:
+ - Imports the `os` module.
+ - Imports `login` from `huggingface_hub` and calls `login(token=os.getenv('HF_TOKEN'))`.
+
+Key points / variables:
+ - Expects an environment variable named `HF_TOKEN` containing a valid Hugging Face API token.
+ - If `HF_TOKEN` is missing or invalid, `login` may raise an exception or cause API calls later to fail.
+
+Usage notes / edge cases:
+ - If you run this notebook interactively, ensure `export HF_TOKEN=...` in your shell or set the token in your environment.
+ - Consider wrapping `login(...)` in a try/except to present a clearer error message if the token is missing.
+
+---
+
+Cell 2 — Code
+Purpose:
+ - Import commonly used libraries and helpers for data processing.
+
+What it does:
+ - Imports os, re, json, math, pandas (pd), numpy (np), and Path from pathlib.
+
+Key variables:
+ - These are general-purpose imports used by many subsequent cells.
+
+Usage notes:
+ - If any of these packages are missing, later cells will fail; the notebook includes a dependency installer cell (see Cell 3).
+
+---
+
+Cell 3 — Code (dependency installer)
+Purpose:
+ - Ensure required Python packages are installed at runtime when the notebook is run.
+
+What it does:
+ - Defines `pip_install(package)` that attempts to import the package and, if missing, installs it using pip via `subprocess.check_call`.
+ - Iterates a list of packages (`['sentence-transformers','PyPDF2','scikit-learn','tqdm','huggingface_hub']`) and calls `pip_install` for each.
+ - Prints "Dependencies ensured." on completion.
+
+Key considerations:
+ - Assumes the runtime allows installations and has internet access.
+ - Uses a simple heuristic to convert package names to importable module names by splitting on `==` and replacing '-' with '_'. This works in many cases but might fail for packages where the import name differs significantly.
+
+Edge cases:
+ - If pip installation requires privileges or the environment forbids programmatic installs, this will fail.
+ - For reproducible environments prefer a `requirements.txt` or pinned versions.
+
+---
+
+Cell 4 — Code (feature imports and availability flags)
+Purpose:
+ - Import model utilities and set flags indicating availability of optional components.
+
+What it does:
+ - Imports typing helpers, `tqdm`, cosine similarity and TfidfVectorizer from scikit-learn.
+ - Tries to import `SentenceTransformer` to set `SENTENCE_TRANSFORMERS_AVAILABLE` flag.
+ - Tries to import `CrossEncoder` to set `CROSS_ENCODER_AVAILABLE` flag.
+ - Imports `PyPDF2` and `InferenceClient` from `huggingface_hub`.
+
+Why it's important:
+ - Downstream logic branches depending on whether `sentence-transformers` and `CrossEncoder` are available.
+
+Notes:
+ - The flags allow graceful fallback to TF-IDF encoding if SBERT is unavailable.
+
+---
+
+Cell 5 — Code (configuration constants)
+Purpose:
+ - Define high-level configuration: data paths, model choices, chunking and ranking parameters.
+
+Key variables defined:
+ - `DATA_ROOT`: Path to the archive folder `archive/supreme_court_judgments`.
+ - `TARGET_CASE_FILENAME`: the filename for the target case used in the example.
+ - `YEARS`: computed list of years (directories) under `DATA_ROOT` that are purely digits.
+ - Flags and model settings: `USE_HF_REASONING`, `REASONING_MODEL_ID`, `HF_MAX_TOKENS`, `HF_TEMPERATURE`.
+ - Chunking constants: `CHUNK_SIZE`, `CHUNK_OVERLAP`.
+ - Limits and ranking options: `MAX_FILES_PER_YEAR`, `USE_CROSS_ENCODER`, `CROSS_ENCODER_MODEL`, `PRIORITIZE_SUPREME`, `CITATION_BOOST`, `PRELIM_TOP_K`, `FINAL_TOP_K`.
+
+Usage notes:
+ - Tweak these constants to change behavior: bigger CHUNK_SIZE increases context per embedding; increasing PRELIM_TOP_K makes the LLM reason over more candidates.
+
+Assumptions:
+ - The archive structure matches expectations (subfolders named by year containing PDFs).
+
+---
+
+Cell 6 — Code (`read_pdf_text`)
+Purpose:
+ - Read a PDF file from disk and extract its text into a cleaned string.
+
+What it does:
+ - Uses `PyPDF2.PdfReader` to iterate pages and call `page.extract_text()`.
+ - Joins page texts with newlines, runs regex cleanup: collapse repeated spaces and collapse 3+ newlines to double newlines.
+ - Returns trimmed text.
+
+Edge cases and robustness:
+ - Wrapped in try/except to print a failure message and return as much as could be extracted.
+ - Page extraction can fail on scanned PDFs without OCR; such documents may return empty text.
+
+---
+
+Cell 7 — Code (`extract_sections`)
+Purpose:
+ - Heuristically split raw case text into named sections: case_title, date, court, bench, facts, issues, verdict_reasoning, citation.
+
+What it does (high-level):
+ - Normalizes lines and constructs a `head` (first ~50 lines) and `body` (all lines).
+ - Uses regex heuristics to find a case title (patterns for "v. / vs / versus"), date, court, bench, and citation.
+ - Defines an inner helper `extract_block(keyword_patterns)` which locates a heading line (matching keywords like FACTS, ISSUES, JUDGMENT) and collects following lines until a new all-caps heading is encountered.
+ - Populates `data` dict with found sections and returns it.
+
+Key assumptions & limitations:
+ - Heuristics may fail for documents that use uncommon formatting or non-standard headings.
+ - The `extract_block` function relies on uppercase headings detection; if headings are not uppercase or are punctuated differently, extraction may not work correctly.
+
+Usage notes:
+ - This function is central: extracted sections are used to build documents for embedding, to extract key terms, and to craft LLM prompts.
+
+---
+
+Cell 8 — Code (`EmbeddingBackend` and helpers)
+Purpose:
+ - Provide a pluggable embedding backend that uses SBERT when available or TF-IDF as a fallback.
+
+What it does:
+ - Defines class `EmbeddingBackend` with `mode` ('sbert' or 'tfidf'), `model`, and `vectorizer` attributes.
+ - On init, attempts to load `SentenceTransformer(model_name)`; on failure falls back to TF-IDF.
+ - `_init_tfidf` creates a `TfidfVectorizer(ngram_range=(1,2), max_features=60000)`.
+ - `fit_corpus` fits TF-IDF on a list of docs (used when TF-IDF mode is active).
+ - `encode(docs)` returns SBERT embeddings (normalized numpy array) or a normalized TF-IDF matrix as numpy array.
+ - `aggregate_chunk_vectors` provides a simple method to aggregate chunk-level embeddings into a single vector (mean or max supported).
+
+Interactions:
+ - Used by the ranking pipeline (Cell 10) to embed the target and candidate documents.
+
+Edge cases:
+ - Loading large SBERT models may require significant memory; the notebook attempts to load a default lightweight model but checks availability.
+
+---
+
+Cell 9 — Code (gather and representation helpers)
+Purpose:
+ - Provide utilities to gather case texts from disk and convert extracted sections into a single document string used for embedding.
+
+What it does:
+ - `gather_case_texts(limit_per_year)` walks `YEARS`, reads up to `limit_per_year` PDFs per year and returns a list of tuples (year, filename, text).
+ - `build_document_representation(sections)` concatenates the values of `SECTION_KEYS` in a fixed order to create a document string.
+
+Notes:
+ - `gather_case_texts` calls `read_pdf_text` for each file — this can be slow; consider caching extracted text to disk if re-running.
+
+---
+
+Cell 10 — Code (processing target & ranking pipeline `rank_similar`)
+Purpose:
+ - Process the target case (read, extract sections) and run a two-stage retrieval+re-ranking pipeline to find similar cases.
+
+What it does:
+ - `process_target_case()` reads the target PDF (from 1950 folder with filename in config), extracts sections and builds the document representation.
+ - `rank_similar(target_doc, corpus, top_k, target_raw, target_sections_arg)` performs retrieval and optional LLM-based reasoning:
+   - Initializes an `EmbeddingBackend` and embeds the target using `doc_embed` (which chunks and averages SBERT chunk embeddings, or gets TF-IDF vector).
+   - Prepares candidate vectors; if TF-IDF, fits vectorizer across target+corpus.
+   - Computes cosine similarity between target and all candidate vectors.
+   - Boosts scores using `boost_score` (prefers Supreme Court cases and shared citations).
+   - Optionally re-ranks top prelim candidates with a CrossEncoder (if available and enabled).
+   - For the top prelims, either calls `batch_generate_explanations` (LLM via HF) to explain similarity, or uses `generate_explanation` (a fallback local function) per candidate.
+   - Returns a final list of top_k results with `case_name`, `year`, `citation`, `similarity`, and `reason`.
+
+Key interactions:
+ - Uses `EmbeddingBackend`, `doc_embed`, `extract_sections`, `extract_citations`, `boost_score`, and the LLM-based `batch_generate_explanations`.
+
+Performance / runtime notes:
+ - Embedding and similarity steps can be expensive for large corpora. The config limits (`MAX_FILES_PER_YEAR`) help keep runs manageable.
+
+---
+
+Cell 11 — Code (runner setup and initial run)
+Purpose:
+ - Example driver code that processes the target case, gathers a corpus limited by `MAX_FILES_PER_YEAR`, runs ranking, and prints JSON results.
+
+What it does:
+ - Sets `MAX_FILES_PER_YEAR` again (re-definition) and calls `process_target_case()` to prepare `target_sections`, `target_doc`, `target_raw`.
+ - Gathers corpus via `gather_case_texts(limit_per_year=MAX_FILES_PER_YEAR)`.
+ - Removes the target file from the corpus (so it is not compared with itself).
+ - Calls `rank_similar(..., top_k=FINAL_TOP_K, ...)` and prints the results as JSON.
+
+Usage notes:
+ - This cell effectively runs the demo pipeline. When running for real, ensure the archive path exists and HF token is set if `USE_HF_REASONING` is True.
+
+---
+
+Cell 12 — Code (`chunk_text`)
+Purpose:
+ - Split a long text into overlapping chunks for chunk-based embeddings.
+
+What it does:
+ - Iteratively slices the input `text` into segments of size `CHUNK_SIZE` with overlap `CHUNK_OVERLAP` and returns a list of stripped segments.
+
+Edge cases:
+ - If `CHUNK_OVERLAP` is >= `CHUNK_SIZE` the loop may not progress as intended — the config uses sensible defaults.
+ - Very short texts will return a single chunk.
+
+---
+
+Cell 13 — Code (citation utilities, `doc_embed`, `boost_score`)
+Purpose:
+ - Provide utilities to extract citations, embed documents, and apply a small heuristic score boost.
+
+What it does:
+ - Compiles `CITATION_REGEX` to match common case citation formats.
+ - `extract_citations(text)` returns a set of matched citation strings.
+ - `doc_embed(backend, text)` applies chunking and uses `EmbeddingBackend` to encode and aggregate chunk vectors for SBERT, or encodes whole text for TF-IDF.
+ - `boost_score` increases similarity slightly if `PRIORITIZE_SUPREME` and the candidate is from the Supreme Court, or if candidate shares citations with the target (when `CITATION_BOOST` is True).
+
+Notes:
+ - Boosts are modest (for small score nudges) and constrained to keep final scores in [0,1].
+
+---
+
+Cell 14 — Code (cleaning, key terms, and `best_case_name`)
+Purpose:
+ - Utilities to clean section text for prompts, extract top TF-IDF key terms, and produce a readable case name for display.
+
+What it does:
+ - `clean_section_text(s, max_chars)`: remove legal noise prefixes and collapse lines, returning first `max_chars` characters.
+ - `get_key_terms(a, b, top_k)`: fits TF-IDF on two short strings and returns top terms for each and overlap.
+ - `best_case_name(filename, sections)`: prefer `sections['case_title']`, else fall back to a cleaned filename-derived base.
+
+Usage:
+ - `clean_section_text` is used when preparing prompts for the LLM to keep tokens in check.
+
+---
+
+Cell 15 — Code (`batch_generate_explanations` via HF InferenceClient)
+Purpose:
+ - Build a single chat-style prompt containing the target case and all candidate summaries and call a Hugging Face chat-completion API to get concise per-candidate explanations for similarity.
+
+What it does:
+ - If `USE_HF_REASONING` is False or `candidates` is empty, returns default messages.
+ - Initializes `InferenceClient()` (from `huggingface_hub`). If initialization fails, returns error messages for each candidate.
+ - Constructs a `system_msg` and `user_msg` containing cleaned fields for target and candidates (title, date, court, issues, reasoning). Candidate blocks are prefixed with `CANDIDATE N (Similarity: ...)` lines.
+ - Calls `client.chat_completion(...)` with the configured `REASONING_MODEL_ID`, `max_tokens`, and `temperature`.
+ - Parses the returned text by splitting on lines that start with `CANDIDATE N:` and collects the following lines as that candidate's explanation.
+
+Important notes:
+ - The method expects a chat API compatible response structure (`resp.choices[0].message.content`). If HF returns a different structure or the model doesn't support chat completions, this will fail.
+ - The code sets `max_tokens` proportional to number of candidates; make sure the configured `HF_MAX_TOKENS` and model token limits align with prompt size.
+ - On exception, returns short failure messages for each candidate.
+
+---
+
+Cell 16 — Code (architecture & notes block)
+Purpose:
+ - Provide a human-readable architecture summary and notes inside a code cell (multiline string lines). This is documentation and not executed logic.
+
+What it contains:
+ - Description of stage 1 retrieval and stage 2 reasoning, key improvements, configuration notes, and scaling advice.
+
+Usage:
+ - Informational only; safe to convert to a Markdown cell if desired.
+
+---
+
+Cell 17 — Markdown (Interactive Legal Chatbot heading)
+Purpose:
+ - Markdown header introducing the interactive chatbot feature and describing the chatbot's capabilities.
+
+---
+
+Cell 18 — Code (chatbot configuration)
+Purpose:
+ - Chatbot-specific configuration constants: `CHATBOT_MODEL_ID`, `CHATBOT_MAX_TOKENS`, `CHATBOT_TEMPERATURE`, and `MAX_CONVERSATION_HISTORY`.
+
+Notes:
+ - These are separate from the batch reasoning model settings and govern how the interactive assistant replies.
+
+---
+
+Cell 19 — Code (`build_chatbot_context`)
+Purpose:
+ - Build a consolidated context string containing the target case (title, date, court, citation, cleaned facts/issues/reasoning) and the list of similar cases (name, year, citation, similarity, reason).
+
+Why it's important:
+ - This string is embedded into the chatbot's system prompt so the LLM can reference the case facts when answering user queries without re-sending full documents each time.
+
+Edge cases:
+ - Context length must be kept under the model's token limits; the function trims individual sections with `clean_section_text`.
+
+---
+
+Cell 20 — Code (`LegalChatbot` class)
+Purpose:
+ - Interactive chatbot wrapper that uses the `InferenceClient` to perform chat completions with the model and maintains conversation history.
+
+What it does:
+ - Constructor accepts `target_sections`, `similar_cases`, and `model_id` and builds `self.context` via `build_chatbot_context`.
+ - Attempts to instantiate `InferenceClient()` and records availability.
+ - `chat(user_message)` builds a system prompt embedding the context, appends conversation history, calls `client.chat_completion(...)` and returns the assistant's message. It also manages history length.
+ - `reset_conversation` clears conversation history.
+ - `get_suggested_questions` returns a list of sample questions to help users get started.
+
+Important details:
+ - If HF client cannot be initialized, `available` is False and `chat` will return a message indicating unavailability.
+ - The system prompt contains strict instructions telling the LLM how to behave and what to cite.
+
+---
+
+Cell 21 — Code (initialize chatbot)
+Purpose:
+ - Instantiate a `LegalChatbot` with `target_sections` and `results` (the output from `rank_similar`) and print status messages.
+
+What it does:
+ - `chatbot = LegalChatbot(target_sections, results)` and prints confirmation followed by summary counts.
+
+Notes:
+ - Requires `target_sections` and `results` to already be defined (Cell 11's runner creates them). If the runner hasn't been executed, this cell will error.
+
+---
+
+Cell 22 — Code (display suggested questions)
+Purpose:
+ - Print suggested starter questions from the chatbot to assist the user interactively.
+
+---
+
+Cell 23 — Code (example single question call)
+Purpose:
+ - Demonstrate calling `chatbot.chat(...)` once programmatically with a sample question and print the response.
+
+Notes:
+ - This requires the chatbot to be initialized (Cell 21). It is useful for quick checks.
+
+---
+
+Cell 24 — Code (interactive chat loop)
+Purpose:
+ - Provide a command-line interactive loop to allow the user to type questions and receive responses from the `LegalChatbot` repeatedly until they exit.
+
+What it does:
+ - Presents simple commands: 'exit/quit/bye', 'reset', and 'suggestions'.
+ - Reads user input via Python `input(...)`, sends it to `chatbot.chat`, and prints returned answers.
+
+Usage notes / edge cases:
+ - Running this cell will block the notebook until the loop exits; it's intended for interactive use.
+ - If executed in non-interactive environments (e.g., automated runs), `input()` will raise EOFError.
+
+---
+
+Cell 25 — Markdown (Alternative single question mode)
+Purpose:
+ - Document that the user may prefer single-question cells rather than the interactive loop.
+
+---
+
+Cell 26 — Code (single-question cell)
+Purpose:
+ - Provide a convenience cell to ask a single question (programmatic version of the interactive mode) and print the reply.
+
+---
+
+Cell 27 — Code (view conversation history)
+Purpose:
+ - Print the chatbot's conversation history (user and assistant messages) in a readable format.
+
+Usage notes:
+ - Useful for debugging or summarizing earlier exchanges. History entries are truncated to 200 characters in the display.
+
+---
+
+Final notes and suggestions
+ - Running order matters: the reader should execute the dependency cell (3) early, then the imports and flags cell (4). Configure or export `HF_TOKEN` before Cell 1 so the HF API calls work.
+ - For iterative work, extract text caching and saved embeddings to speed repeated runs. The notebook reads raw PDFs every run which can be slow.
+ - Consider converting the documentation-like Code cells (e.g., Cell 16) to Markdown cells for clarity.
+ - Add error handling around HF client calls and wrapping large model loads in try/except with memory checks.
+
+File generated: `model/main_notebook_explanation.txt` — contains this content.
