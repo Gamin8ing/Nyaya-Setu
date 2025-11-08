@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NyayaSetu Web (Hackathon Build)
+
+NyayaSetu is a Legal-AI assistant helping Indian legal teams bridge raw case material to relevant precedents and bilingual (Hindi/English) legal articulation.
+
+## Features
+- Landing page with mission & workflow explanation.
+- Dashboard with sidebar (past chats via local storage) & New Case modal.
+- Case submission form: facts, issue, rationale, current judgment, documents, comments.
+- API route integrates with N8N workflow via `N8N_WEBHOOK_URL` (multipart compatible) or returns mock data when unset.
+- Displays extracted facts, issues, statutes, precedent matches, language-law alignment, assistant notes.
+- Responsive design (Tailwind CSS) + accessible modal.
+- TypeScript types for structured data.
+
+## Tech Stack
+- Next.js 14 (App Router)
+- React 18
+- Tailwind CSS
+- JavaScript (no TypeScript)
 
 ## Getting Started
-
-First, run the development server:
-
 ```bash
+# Install deps
+npm install
+# Run dev
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Visit http://localhost:3000.
+
+## Environment
+Create `.env.local`:
+```
+N8N_WEBHOOK_URL=https://your-n8n-endpoint/webhook/nyayasetu
+```
+If unset, a mock response is used for demo.
+
+## Folder Structure
+```
+app/                # App Router pages
+  page.tsx          # Landing page
+  dashboard/        # Main interface
+  api/new-case/     # Submission endpoint
+components/         # UI components (Sidebar, NewCaseModal, CaseOutputPanel)
+hooks/              # Custom React hooks (local chat persistence)
+types/              # Shared TypeScript types
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Design System
+Colors: Indigo (primary), Emerald (accent), Amber (highlight), Neutral greys. Font: Inter.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Disclaimer
+NyayaSetu does not provide legal advice. Always validate AI outputs against authoritative sources.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Next Steps (Potential Enhancements)
+- Real similarity search integration (vector DB + embeddings).
+- Auth & role-based access.
+- Persistent backend (Supabase / Postgres) for chats & cases.
+- Hindi → English alignment expansion with stat provisions knowledge base.
+- Rate limiting & audit logging.
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+Made for rapid hackathon prototyping.
